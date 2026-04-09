@@ -264,10 +264,18 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
 
         const chatId = `chatcmpl-${Date.now()}`;
         let toolCallIndex = -1;
-        const toolCallArgs: Record<number, string> = {};
 
         try {
           const anthropicStream = anthropicPool.next().messages.stream(anthropicParams);
+
+          anthropicStream.on("error", (err: any) => {
+            logger.error({ err }, "Anthropic stream error (chat/completions)");
+            try {
+              res.write(`data: ${JSON.stringify({ error: { message: err.message || "Stream error", type: "stream_error" } })}\n\n`);
+              res.write("data: [DONE]\n\n");
+              (res as any).flush?.();
+            } catch {}
+          });
 
           anthropicStream.on("contentBlockStart", (event: any) => {
             if (event.content_block.type === "text") {
@@ -525,11 +533,20 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
         req.on("close", () => clearInterval(keepalive));
 
         try {
+          const msgId = `msg_${Date.now()}`;
+
+          // 立刻发送 message_start，不等 "message" 事件（该事件在流结束后才触发）
+          res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } })}\n\n`);
+          (res as any).flush?.();
+
           const anthropicStream = anthropicPool.next().messages.stream(params);
 
-          anthropicStream.on("message", (event: any) => {
-            res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: event.id, type: "message", role: "assistant", content: [], model, stop_reason: null, usage: { input_tokens: event.usage?.input_tokens || 0, output_tokens: 0 } } })}\n\n`);
-            (res as any).flush?.();
+          anthropicStream.on("error", (err: any) => {
+            logger.error({ err }, "Anthropic stream error (messages)");
+            try {
+              res.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "stream_error", message: err.message || "Stream error" } })}\n\n`);
+              (res as any).flush?.();
+            } catch {}
           });
 
           anthropicStream.on("contentBlockStart", (event: any) => {
@@ -549,7 +566,7 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
 
           const finalMessage = await anthropicStream.finalMessage();
 
-          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: finalMessage.stop_reason }, usage: { output_tokens: finalMessage.usage?.output_tokens || 0 } })}\n\n`);
+          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: finalMessage.stop_reason, stop_sequence: finalMessage.stop_sequence ?? null }, usage: { output_tokens: finalMessage.usage?.output_tokens || 0 } })}\n\n`);
           res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
           (res as any).flush?.();
         } finally {
