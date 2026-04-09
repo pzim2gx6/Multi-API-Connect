@@ -1,21 +1,10 @@
 import { Router, type Request, type Response } from "express";
-import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
 import { logger } from "../lib/logger";
+import { openaiPool, anthropicPool } from "../lib/key-pool";
 
 const proxyRouter: Router = Router();
 
 const PROXY_API_KEY = process.env.PROXY_API_KEY || "";
-
-const openaiClient = new OpenAI({
-  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-});
-
-const anthropicClient = new Anthropic({
-  baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
-  apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
-});
 
 const MODELS = [
   { id: "gpt-5.2", provider: "openai" },
@@ -215,14 +204,16 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
         req.on("close", () => clearInterval(keepalive));
 
         try {
-          const openaiStream = await openaiClient.chat.completions.create({
-            model,
-            messages,
-            stream: true,
-            ...(tools ? { tools } : {}),
-            ...(tool_choice ? { tool_choice } : {}),
-            ...rest,
-          });
+          const openaiStream = await openaiPool.callWithRetry((c) =>
+            c.chat.completions.create({
+              model,
+              messages,
+              stream: true,
+              ...(tools ? { tools } : {}),
+              ...(tool_choice ? { tool_choice } : {}),
+              ...rest,
+            })
+          );
 
           for await (const chunk of openaiStream) {
             res.write(`data: ${JSON.stringify(chunk)}\n\n`);
@@ -235,14 +226,16 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
           res.end();
         }
       } else {
-        const response = await openaiClient.chat.completions.create({
-          model,
-          messages,
-          stream: false,
-          ...(tools ? { tools } : {}),
-          ...(tool_choice ? { tool_choice } : {}),
-          ...rest,
-        });
+        const response = await openaiPool.callWithRetry((c) =>
+          c.chat.completions.create({
+            model,
+            messages,
+            stream: false,
+            ...(tools ? { tools } : {}),
+            ...(tool_choice ? { tool_choice } : {}),
+            ...rest,
+          })
+        );
         res.json(response);
       }
     } else {
@@ -274,7 +267,7 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
         const toolCallArgs: Record<number, string> = {};
 
         try {
-          const anthropicStream = anthropicClient.messages.stream(anthropicParams);
+          const anthropicStream = anthropicPool.next().messages.stream(anthropicParams);
 
           anthropicStream.on("contentBlockStart", (event: any) => {
             if (event.content_block.type === "text") {
@@ -366,8 +359,9 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
           res.end();
         }
       } else {
-        const anthropicStream = anthropicClient.messages.stream(anthropicParams);
-        const finalMessage = await anthropicStream.finalMessage();
+        const finalMessage = await anthropicPool.callWithRetry((c) =>
+          c.messages.stream(anthropicParams).finalMessage()
+        );
         const openaiResponse = convertAnthropicResponseToOpenAI(finalMessage, model);
         res.json(openaiResponse);
       }
@@ -531,7 +525,7 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
         req.on("close", () => clearInterval(keepalive));
 
         try {
-          const anthropicStream = anthropicClient.messages.stream(params);
+          const anthropicStream = anthropicPool.next().messages.stream(params);
 
           anthropicStream.on("message", (event: any) => {
             res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: event.id, type: "message", role: "assistant", content: [], model, stop_reason: null, usage: { input_tokens: event.usage?.input_tokens || 0, output_tokens: 0 } } })}\n\n`);
@@ -563,8 +557,9 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
           res.end();
         }
       } else {
-        const anthropicStream = anthropicClient.messages.stream(params);
-        const finalMessage = await anthropicStream.finalMessage();
+        const finalMessage = await anthropicPool.callWithRetry((c) =>
+          c.messages.stream(params).finalMessage()
+        );
         res.json(finalMessage);
       }
     } else {
@@ -602,11 +597,13 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
         let contentBlockIndex = 0;
 
         try {
-          const openaiStream = await openaiClient.chat.completions.create({
-            ...openaiParams,
-            stream: true,
-            stream_options: { include_usage: true },
-          });
+          const openaiStream = await openaiPool.callWithRetry((c) =>
+            c.chat.completions.create({
+              ...openaiParams,
+              stream: true,
+              stream_options: { include_usage: true },
+            })
+          );
 
           res.write(`event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: msgId, type: "message", role: "assistant", content: [], model, stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } } })}\n\n`);
           (res as any).flush?.();
@@ -672,10 +669,9 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
           res.end();
         }
       } else {
-        const openaiResp = await openaiClient.chat.completions.create({
-          ...openaiParams,
-          stream: false,
-        });
+        const openaiResp = await openaiPool.callWithRetry((c) =>
+          c.chat.completions.create({ ...openaiParams, stream: false })
+        );
         const anthropicResp = convertOpenAIResponseToAnthropic(openaiResp);
         res.json(anthropicResp);
       }
