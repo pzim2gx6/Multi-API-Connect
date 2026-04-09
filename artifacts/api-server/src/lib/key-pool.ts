@@ -122,7 +122,18 @@ class AnthropicPool {
       return;
     }
 
-    this.clients = accounts.map(({ baseURL, apiKey }) => new Anthropic({ baseURL, apiKey }));
+    this.clients = accounts.map(({ baseURL, apiKey }) => {
+      const host = new URL(baseURL).hostname;
+      const isLocalReplit = host === "localhost" || host === "127.0.0.1";
+      const isOfficialAnthropic = host === "api.anthropic.com";
+      // 对于第三方代理（既不是本地 Replit Integration，也不是官方 Anthropic），
+      // 同时发 Authorization: Bearer 头，兼容那些只认 Bearer 格式的代理
+      const defaultHeaders: Record<string, string> =
+        (!isLocalReplit && !isOfficialAnthropic)
+          ? { "Authorization": `Bearer ${apiKey}` }
+          : {};
+      return new Anthropic({ baseURL, apiKey, defaultHeaders });
+    });
     logger.info(`Anthropic pool: ${accounts.length} account(s)`);
     accounts.forEach((a, i) => {
       const host = new URL(a.baseURL).hostname;
@@ -151,7 +162,8 @@ class AnthropicPool {
           continue;
         }
         if (status === 401) {
-          logger.warn({ attempt: attempt + 1, total }, "Anthropic 401 — switching to next account");
+          const errDetail = err?.error?.message || err?.message || JSON.stringify(err).slice(0, 200);
+          logger.warn({ attempt: attempt + 1, total, detail: errDetail }, "Anthropic 401 — switching to next account");
           continue;
         }
         throw err;
