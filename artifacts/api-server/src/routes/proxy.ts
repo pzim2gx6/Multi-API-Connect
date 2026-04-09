@@ -533,11 +533,10 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
         req.on("close", () => clearInterval(keepalive));
 
         try {
-          // 直接迭代原始 SSE 事件并透传，避免高层事件绑定的可靠性问题
-          const rawStream = await anthropicPool.next().messages.create({
-            ...(params as any),
-            stream: true,
-          });
+          // 直接迭代原始 SSE 事件并透传，支持 401/429 自动换账号
+          const rawStream = await anthropicPool.callWithRetry((c) =>
+            c.messages.create({ ...(params as any), stream: true }) as any
+          );
 
           for await (const event of rawStream as any) {
             res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
