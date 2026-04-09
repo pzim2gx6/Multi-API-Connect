@@ -500,7 +500,14 @@ function convertOpenAIResponseToAnthropic(openaiResp: any): any {
 proxyRouter.post("/messages", async (req: Request, res: Response) => {
   if (!verifyToken(req, res)) return;
 
-  const { model, messages, system, tools, tool_choice, max_tokens, stream, ...rest } = req.body;
+  const {
+    model, messages, system, tools, tool_choice, max_tokens, stream,
+    context_management: _cm,   // Vertex AI 不支持，丢弃
+    thinking: _thinking,       // Vertex AI 不支持，丢弃
+    betas: _betas,             // 应放在请求头而非 body，丢弃
+    ...rest
+  } = req.body;
+  void _cm; void _thinking; void _betas;
 
   if (!model || !messages) {
     res.status(400).json({ error: { message: "model and messages are required", type: "invalid_request_error" } });
