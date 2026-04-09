@@ -92,6 +92,10 @@ class OpenAIPool {
           logger.warn({ attempt: attempt + 1, total }, "OpenAI 429 — switching to next account");
           continue;
         }
+        if (status === 401) {
+          logger.warn({ attempt: attempt + 1, total }, "OpenAI 401 — switching to next account");
+          continue;
+        }
         throw err;
       }
     }
@@ -144,6 +148,10 @@ class AnthropicPool {
         const status = err?.status ?? err?.statusCode;
         if (status === 429) {
           logger.warn({ attempt: attempt + 1, total }, "Anthropic 429 — switching to next account");
+          continue;
+        }
+        if (status === 401) {
+          logger.warn({ attempt: attempt + 1, total }, "Anthropic 401 — switching to next account");
           continue;
         }
         throw err;
