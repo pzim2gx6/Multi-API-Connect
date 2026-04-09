@@ -74,17 +74,184 @@ curl https://your-domain/v1/messages \
 3. API Key 填入你的 `PROXY_API_KEY`
 4. 选择模型，开始对话
 
-## 部署到 Replit
+---
 
-1. Fork 本项目到 Replit
-2. 在 Replit Integrations 中添加 OpenAI 和 Anthropic AI 集成（自动注入环境变量，无需自备 Key）
-3. 在 Replit Secrets 中添加：
-   - `PROXY_API_KEY`：任意字符串，作为鉴权 Bearer Token
-4. 运行项目，访问根路径查看 API 门户
+## 自部署教程
+
+### 方案一：部署到 Replit（推荐，无需自备 API Key）
+
+Replit 提供托管的 OpenAI 和 Anthropic 代理（费用计入 Replit 积分），无需注册 OpenAI/Anthropic 账号。
+
+**前置条件**
+
+- Replit 账号（Deploy 功能需要 Core 订阅）
+
+**步骤**
+
+1. **Fork 项目**
+
+   在 Replit 中打开本仓库，点击右上角 **Fork** 按钮，复制到自己账号下。
+
+2. **添加 AI Integrations**
+
+   进入项目 → 左侧菜单 **Integrations（集成）**，分别搜索并添加：
+   - **OpenAI** AI Integration
+   - **Anthropic** AI Integration
+
+   添加后 Replit 自动注入以下环境变量，无需手动填写：
+   ```
+   AI_INTEGRATIONS_OPENAI_BASE_URL
+   AI_INTEGRATIONS_OPENAI_API_KEY
+   AI_INTEGRATIONS_ANTHROPIC_BASE_URL
+   AI_INTEGRATIONS_ANTHROPIC_API_KEY
+   ```
+
+3. **设置 Secrets**
+
+   进入项目 → **Secrets**，添加：
+
+   | 变量名 | 说明 |
+   |--------|------|
+   | `PROXY_API_KEY` | 自定义字符串，用于鉴权，填入客户端的 API Key 字段 |
+
+4. **启动并部署**
+
+   - 点击顶部 **Run** 运行开发环境，验证接口正常
+   - 点击 **Deploy** → **Autoscale** 部署到生产，获得永久访问地址
+
+---
+
+### 方案二：部署到其他平台（需自备 API Key）
+
+适合 Railway、Render、Fly.io、VPS 等任意 Node.js 环境。需要自己提供 OpenAI 和 Anthropic 的 API Key。
+
+**前置条件**
+
+- Node.js 18 或以上
+- pnpm（安装：`npm install -g pnpm`）
+- OpenAI API Key（在 [platform.openai.com](https://platform.openai.com) 获取）
+- Anthropic API Key（在 [console.anthropic.com](https://console.anthropic.com) 获取）
+
+**环境变量**
+
+部署时必须设置以下 5 个环境变量：
+
+| 变量名 | 值 |
+|--------|-----|
+| `AI_INTEGRATIONS_OPENAI_BASE_URL` | `https://api.openai.com/v1` |
+| `AI_INTEGRATIONS_OPENAI_API_KEY` | 你的 OpenAI API Key |
+| `AI_INTEGRATIONS_ANTHROPIC_BASE_URL` | `https://api.anthropic.com` |
+| `AI_INTEGRATIONS_ANTHROPIC_API_KEY` | 你的 Anthropic API Key |
+| `PROXY_API_KEY` | 自定义字符串，用于鉴权 |
+
+**本地运行**
+
+```bash
+# 克隆项目
+git clone https://github.com/pzim2gx6/Multi-API-Connect.git
+cd Multi-API-Connect
+
+# 安装依赖
+pnpm install
+
+# 复制环境变量模板
+cp .env.example .env
+# 编辑 .env，填入上方所有变量
+
+# 启动 API 服务（端口默认读取 $PORT，未设置时为 3000）
+pnpm --filter @workspace/api-server run dev
+
+# 另开一个终端启动前端门户（可选）
+pnpm --filter @workspace/api-portal run dev
+```
+
+**生产构建**
+
+```bash
+# 构建 API 服务
+pnpm --filter @workspace/api-server run build
+
+# 启动生产服务
+pnpm --filter @workspace/api-server run start
+```
+
+**部署到 Railway**
+
+1. 在 [railway.app](https://railway.app) 新建项目，选择 **Deploy from GitHub repo**
+2. 连接本仓库
+3. 在 **Variables** 面板填入上方 5 个环境变量
+4. Railway 自动检测 pnpm 并完成构建，部署完成后获得访问域名
+
+**部署到 Render**
+
+1. 在 [render.com](https://render.com) 新建 **Web Service**，连接本仓库
+2. 设置：
+   - **Build Command**：`pnpm install && pnpm --filter @workspace/api-server run build`
+   - **Start Command**：`pnpm --filter @workspace/api-server run start`
+3. 在 **Environment** 面板填入上方 5 个环境变量
+
+**部署到 VPS / 自有服务器**
+
+```bash
+# 安装 Node.js 18+ 和 pnpm（以 Ubuntu 为例）
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt install -y nodejs
+npm install -g pnpm
+
+# 克隆并构建
+git clone https://github.com/pzim2gx6/Multi-API-Connect.git
+cd Multi-API-Connect
+pnpm install
+pnpm --filter @workspace/api-server run build
+
+# 配置环境变量（以 systemd 为例，也可使用 .env 文件 + dotenv）
+export AI_INTEGRATIONS_OPENAI_BASE_URL=https://api.openai.com/v1
+export AI_INTEGRATIONS_OPENAI_API_KEY=sk-...
+export AI_INTEGRATIONS_ANTHROPIC_BASE_URL=https://api.anthropic.com
+export AI_INTEGRATIONS_ANTHROPIC_API_KEY=sk-ant-...
+export PROXY_API_KEY=your-secret-key
+export PORT=3000
+
+# 启动服务
+pnpm --filter @workspace/api-server run start
+
+# 建议配合 nginx 反向代理 + pm2 保活
+```
+
+**使用 pm2 保活（推荐）**
+
+```bash
+npm install -g pm2
+
+# 启动
+PORT=3000 \
+AI_INTEGRATIONS_OPENAI_BASE_URL=https://api.openai.com/v1 \
+AI_INTEGRATIONS_OPENAI_API_KEY=sk-... \
+AI_INTEGRATIONS_ANTHROPIC_BASE_URL=https://api.anthropic.com \
+AI_INTEGRATIONS_ANTHROPIC_API_KEY=sk-ant-... \
+PROXY_API_KEY=your-secret-key \
+pm2 start "pnpm --filter @workspace/api-server run start" --name multi-api-connect
+
+# 设置开机自启
+pm2 save && pm2 startup
+```
+
+---
+
+### 验证部署是否成功
+
+服务启动后，运行以下命令，返回 HTTP 200 和模型列表即为成功：
+
+```bash
+curl https://your-domain/v1/models \
+  -H "Authorization: Bearer YOUR_PROXY_API_KEY"
+```
+
+---
 
 ## 技术栈
 
-- **运行时**：Node.js 24 + TypeScript
+- **运行时**：Node.js 18+ + TypeScript
 - **框架**：Express 5
 - **包管理**：pnpm workspaces (monorepo)
 - **AI SDK**：openai ^6 + @anthropic-ai/sdk ^0.82
