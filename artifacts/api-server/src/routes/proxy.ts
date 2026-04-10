@@ -19,7 +19,11 @@ const MODELS = [
 
 function verifyToken(req: Request, res: Response): boolean {
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith("Bearer ") || auth.slice(7) !== PROXY_API_KEY) {
+  const xApiKey = req.headers["x-api-key"];
+  const key =
+    (auth && auth.startsWith("Bearer ") ? auth.slice(7) : null) ??
+    (typeof xApiKey === "string" ? xApiKey : null);
+  if (!key || key !== PROXY_API_KEY) {
     res.status(401).json({ error: { message: "Invalid or missing API key", type: "authentication_error" } });
     return false;
   }
@@ -264,6 +268,7 @@ proxyRouter.post("/chat/completions", async (req: Request, res: Response) => {
 
         const chatId = `chatcmpl-${Date.now()}`;
         let toolCallIndex = -1;
+        const toolCallArgs: Record<number, string> = {};
 
         try {
           const anthropicStream = anthropicPool.next().messages.stream(anthropicParams);
@@ -481,15 +486,13 @@ function convertOpenAIResponseToAnthropic(openaiResp: any): any {
     }
   }
 
-  const stopReason = choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn";
-
   return {
     id: openaiResp.id || `msg_${Date.now()}`,
     type: "message",
     role: "assistant",
     content,
     model: openaiResp.model,
-    stop_reason: stopReason,
+    stop_reason: choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn",
     usage: {
       input_tokens: openaiResp.usage?.prompt_tokens || 0,
       output_tokens: openaiResp.usage?.completion_tokens || 0,
@@ -593,8 +596,6 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
 
         const msgId = `msg_${Date.now()}`;
         let toolCallIndex = -1;
-        let inputTokens = 0;
-        let outputTokens = 0;
         let contentBlockIndex = 0;
 
         try {
@@ -611,19 +612,18 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
 
           let textBlockStarted = false;
           let lastFinishReason: string | null = null;
+          let totalUsage = { input_tokens: 0, output_tokens: 0 };
 
           for await (const chunk of openaiStream) {
             if (chunk.usage) {
-              inputTokens = chunk.usage.prompt_tokens || 0;
-              outputTokens = chunk.usage.completion_tokens || 0;
+              totalUsage.input_tokens = chunk.usage.prompt_tokens || 0;
+              totalUsage.output_tokens = chunk.usage.completion_tokens || 0;
             }
 
             const choice = chunk.choices?.[0];
             if (!choice) continue;
 
-            if (choice.finish_reason) {
-              lastFinishReason = choice.finish_reason;
-            }
+            if (choice.finish_reason) lastFinishReason = choice.finish_reason;
 
             const delta = choice.delta;
             if (!delta) continue;
@@ -657,12 +657,15 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
             }
           }
 
-          if (textBlockStarted || toolCallIndex >= 0) {
+          if (textBlockStarted) {
             res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentBlockIndex })}\n\n`);
+          }
+          if (toolCallIndex >= 0) {
+            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: contentBlockIndex + toolCallIndex })}\n\n`);
           }
 
           const stopReason = lastFinishReason === "tool_calls" ? "tool_use" : "end_turn";
-          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: outputTokens } })}\n\n`);
+          res.write(`event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: stopReason }, usage: { output_tokens: totalUsage.output_tokens } })}\n\n`);
           res.write(`event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`);
           (res as any).flush?.();
         } finally {
@@ -670,15 +673,15 @@ proxyRouter.post("/messages", async (req: Request, res: Response) => {
           res.end();
         }
       } else {
-        const openaiResp = await openaiPool.callWithRetry((c) =>
+        const response = await openaiPool.callWithRetry((c) =>
           c.chat.completions.create({ ...openaiParams, stream: false })
         );
-        const anthropicResp = convertOpenAIResponseToAnthropic(openaiResp);
-        res.json(anthropicResp);
+        const anthropicResponse = convertOpenAIResponseToAnthropic(response);
+        res.json(anthropicResponse);
       }
     }
   } catch (err: any) {
-    logger.error({ err }, "Proxy messages error");
+    logger.error({ err }, "Proxy /messages error");
     if (!res.headersSent) {
       res.status(err.status || 500).json({
         error: { message: err.message || "Internal server error", type: "proxy_error" },
