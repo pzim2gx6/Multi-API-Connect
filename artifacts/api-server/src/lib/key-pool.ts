@@ -45,18 +45,29 @@ function parseAccounts(
   return [];
 }
 
+/** 若配置了 EXTRA_PROXY_BASE_URL + EXTRA_PROXY_API_KEY，追加到账号列表末尾 */
+function appendExtraProxy(accounts: Account[]): Account[] {
+  const baseURL = process.env.EXTRA_PROXY_BASE_URL;
+  const apiKey = process.env.EXTRA_PROXY_API_KEY;
+  if (baseURL && apiKey) {
+    return [...accounts, { baseURL, apiKey }];
+  }
+  return accounts;
+}
+
 class OpenAIPool {
   private clients: OpenAI[];
   private index = 0;
 
   constructor() {
-    const accounts = parseAccounts(
+    const base = parseAccounts(
       process.env.OPENAI_ACCOUNTS,
       process.env.OPENAI_API_KEYS,
       process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
       process.env.OPENAI_BASE_URL ?? process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
       "https://api.openai.com/v1"
     );
+    const accounts = appendExtraProxy(base);
 
     if (accounts.length === 0) {
       logger.warn("No OpenAI accounts configured");
@@ -108,13 +119,14 @@ class AnthropicPool {
   private index = 0;
 
   constructor() {
-    const accounts = parseAccounts(
+    const base = parseAccounts(
       process.env.ANTHROPIC_ACCOUNTS,
       process.env.ANTHROPIC_API_KEYS,
       process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
       process.env.ANTHROPIC_BASE_URL ?? process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
       "https://api.anthropic.com"
     );
+    const accounts = appendExtraProxy(base);
 
     if (accounts.length === 0) {
       logger.warn("No Anthropic accounts configured");
@@ -123,21 +135,23 @@ class AnthropicPool {
     }
 
     this.clients = accounts.map(({ baseURL, apiKey }) => {
-      const host = new URL(baseURL).hostname;
-      const isLocalReplit = host === "localhost" || host === "127.0.0.1";
+      // Anthropic SDK 自身会拼 /v1/messages，所以 baseURL 不能带 /v1 后缀
+      const normalizedURL = baseURL.replace(/\/v1\/?$/, "");
+      const host = new URL(normalizedURL).hostname;
       const isOfficialAnthropic = host === "api.anthropic.com";
-      // 对于第三方代理（既不是本地 Replit Integration，也不是官方 Anthropic），
-      // 同时发 Authorization: Bearer 头，兼容那些只认 Bearer 格式的代理
+      // Replit AI Integration 本地代理和第三方代理都期待 Authorization: Bearer，
+      // 而 Anthropic SDK 默认只发 x-api-key，需手动补齐（官方 Anthropic 除外）
       const defaultHeaders: Record<string, string> =
-        (!isLocalReplit && !isOfficialAnthropic)
-          ? { "Authorization": `Bearer ${apiKey}` }
+        (!isOfficialAnthropic)
+          ? { Authorization: `Bearer ${apiKey}` }
           : {};
-      return new Anthropic({ baseURL, apiKey, defaultHeaders });
+      return new Anthropic({ baseURL: normalizedURL, apiKey, defaultHeaders });
     });
     logger.info(`Anthropic pool: ${accounts.length} account(s)`);
     accounts.forEach((a, i) => {
       const host = new URL(a.baseURL).hostname;
-      logger.info(`  [${i + 1}] ${host} / key=...${a.apiKey.slice(-6)}`);
+      const tag = host === "localhost" || host === "127.0.0.1" ? " [local-proxy]" : "";
+      logger.info(`  [${i + 1}] ${host}${tag} / key=...${a.apiKey.slice(-6)}`);
     });
   }
 
