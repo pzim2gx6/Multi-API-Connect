@@ -12,7 +12,16 @@ const ACCENT_PURPLE = "hsl(263, 70%, 50%)";
 const ACCENT_ORANGE = "hsl(25, 95%, 53%)";
 const ACCENT_RED = "hsl(0, 72%, 51%)";
 
-const BASE_URL = window.location.origin;
+// In production the browser's origin IS the deployed domain, so always prefer it.
+// Only fall back to the build-time injected value when the preview is proxied
+// through localhost (the Replit in-editor iframe).
+const _origin = window.location.origin;
+const _isLocalProxy =
+  _origin.startsWith("http://localhost") ||
+  _origin.startsWith("https://localhost");
+const BASE_URL: string = _isLocalProxy
+  ? (import.meta.env.VITE_PUBLIC_DOMAIN as string) || _origin
+  : _origin;
 
 const MODELS = [
   { id: "gpt-5.2", provider: "OpenAI" },
@@ -212,7 +221,7 @@ function App() {
               <path d="M2 12l10 5 10-5" />
             </svg>
             <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, background: `linear-gradient(135deg, ${ACCENT_BLUE}, ${ACCENT_PURPLE})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-              AI Proxy API
+              Multi API Connect
             </h1>
           </div>
           <p style={{ color: TEXT_MUTED, fontSize: 15, margin: 0 }}>
