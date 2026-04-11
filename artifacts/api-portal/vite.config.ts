@@ -26,8 +26,27 @@ if (!basePath) {
   );
 }
 
+// Determine the public-facing domain to embed into the frontend bundle.
+// REPLIT_DOMAINS is a comma-separated list that may include both the
+// ephemeral *.replit.dev dev domain and the stable *.replit.app prod domain.
+// We prefer the stable *.replit.app domain so the displayed URL is consistent
+// across every deployment. Fall back to the first domain, then the dev domain.
+const replitDomains = (process.env.REPLIT_DOMAINS ?? "")
+  .split(",")
+  .map((d) => d.trim())
+  .filter(Boolean);
+const stableDomain =
+  replitDomains.find((d) => d.endsWith(".replit.app")) ??
+  replitDomains[0] ??
+  process.env.REPLIT_DEV_DOMAIN ??
+  "";
+const publicDomain = stableDomain ? `https://${stableDomain}` : "";
+
 export default defineConfig({
   base: basePath,
+  define: {
+    "import.meta.env.VITE_PUBLIC_DOMAIN": JSON.stringify(publicDomain),
+  },
   plugins: [
     react(),
     tailwindcss(),
