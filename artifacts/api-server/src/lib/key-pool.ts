@@ -14,7 +14,6 @@ function parseAccounts(
   envBaseURL: string | undefined,
   defaultBaseURL: string
 ): Account[] {
-  // Priority 1: OPENAI_ACCOUNTS / ANTHROPIC_ACCOUNTS — "url|key,url|key,..."
   if (envAccounts) {
     const accounts = envAccounts
       .split(",")
@@ -30,14 +29,12 @@ function parseAccounts(
     if (accounts.length > 0) return accounts;
   }
 
-  // Priority 2: OPENAI_API_KEYS / ANTHROPIC_API_KEYS — multiple keys, single base URL
   if (envMultiKeys) {
     const base = envBaseURL || defaultBaseURL;
     const keys = envMultiKeys.split(",").map((k) => k.trim()).filter(Boolean);
     if (keys.length > 0) return keys.map((apiKey) => ({ baseURL: base, apiKey }));
   }
 
-  // Priority 3: single key env var (Replit AI Integration or manual)
   if (envSingleKey) {
     return [{ baseURL: envBaseURL || defaultBaseURL, apiKey: envSingleKey }];
   }
@@ -45,7 +42,6 @@ function parseAccounts(
   return [];
 }
 
-/** 若配置了 EXTRA_PROXY_BASE_URL + EXTRA_PROXY_API_KEY，追加到账号列表末尾 */
 function appendExtraProxy(accounts: Account[]): Account[] {
   const baseURL = process.env.EXTRA_PROXY_BASE_URL;
   const apiKey = process.env.EXTRA_PROXY_API_KEY;
@@ -135,14 +131,15 @@ class AnthropicPool {
     }
 
     this.clients = accounts.map(({ baseURL, apiKey }) => {
-      // Anthropic SDK 自身会拼 /v1/messages，所以 baseURL 不能带 /v1 后缀
       const normalizedURL = baseURL.replace(/\/v1\/?$/, "");
       const host = new URL(normalizedURL).hostname;
       const isOfficialAnthropic = host === "api.anthropic.com";
-      // Replit AI Integration 本地代理和第三方代理都期待 Authorization: Bearer，
-      // 而 Anthropic SDK 默认只发 x-api-key，需手动补齐（官方 Anthropic 除外）
+      const isLocalProxy = host === "localhost" || host === "127.0.0.1";
+      // Only add Authorization header for third-party proxies.
+      // Replit's local modelfarm proxy handles auth internally — sending
+      // an extra Authorization header confuses it and causes auth_unavailable.
       const defaultHeaders: Record<string, string> =
-        (!isOfficialAnthropic)
+        !isOfficialAnthropic && !isLocalProxy
           ? { Authorization: `Bearer ${apiKey}` }
           : {};
       return new Anthropic({ baseURL: normalizedURL, apiKey, defaultHeaders });
